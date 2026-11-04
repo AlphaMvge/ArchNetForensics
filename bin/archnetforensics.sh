@@ -71,6 +71,7 @@ SUBNET_OVERRIDE=""
 FILTER=""
 INSTALL_ALL=0
 SKIP_MISSING=0
+TEST_MODE=0
 PCAP_ROT_MB=512
 PCAP_MAX_FILES=100
 EXT_TARGETS=(1.1.1.1 8.8.8.8 9.9.9.9)
@@ -89,6 +90,7 @@ Options:
   -y, --install-all      Non-interactive: auto-install all missing Arch packages
       --skip-missing     Non-interactive: skip all missing tools without prompting
   -f, --filter <bpf>     Optional BPF filter for packet captures (e.g., 'not port 22')
+      --test             Run safe, unprivileged test verification and LLM report synthesis
       --wifi-ids         Launch companion Wi-Fi Deauth IDS monitor
   -v, --version          Show version
   -h, --help             Show this help menu
@@ -119,6 +121,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --skip-missing)
       SKIP_MISSING=1
+      shift
+      ;;
+    --test)
+      TEST_MODE=1
       shift
       ;;
     -d|--duration)
@@ -176,9 +182,14 @@ fi
 
 # Root check
 if [[ $EUID -ne 0 ]]; then
-  echo -e "${CLR_RED}[!] ERROR: ArchNetForensics requires root privileges.${CLR_RESET}" >&2
-  echo -e "    Please run with sudo: ${CLR_BOLD}sudo $0${CLR_RESET}" >&2
-  exit 1
+  if [[ $TEST_MODE -eq 1 ]]; then
+    printf "${CLR_YELLOW}[!] Running in unprivileged TEST mode. Raw socket captures requiring root will be simulated.${CLR_RESET}\n\n"
+  else
+    echo -e "${CLR_RED}[!] ERROR: ArchNetForensics requires root privileges for promiscuous packet capture and raw sockets.${CLR_RESET}" >&2
+    echo -e "    Please run with sudo: ${CLR_BOLD}sudo $0${CLR_RESET}" >&2
+    echo -e "    Or run safe unprivileged test verification: ${CLR_CYAN}$0 --test${CLR_RESET}" >&2
+    exit 1
+  fi
 fi
 
 print_banner
@@ -359,7 +370,11 @@ show_probe_status() {
   local req_tool="$2"
   local desc="$3"
   if have "$req_tool"; then
-    printf "  ${CLR_GREEN}[ACTIVE]${CLR_RESET}  %-24s ${CLR_GRAY}(%s)${CLR_RESET}\n" "$name" "$desc"
+    if [[ "$req_tool" == "tcpdump" && $EUID -ne 0 ]]; then
+      printf "  ${CLR_YELLOW}[SIMULATED]${CLR_RESET} %-24s ${CLR_GRAY}(requires root - verified in test mode)${CLR_RESET}\n" "$name"
+    else
+      printf "  ${CLR_GREEN}[ACTIVE]${CLR_RESET}  %-24s ${CLR_GRAY}(%s)${CLR_RESET}\n" "$name" "$desc"
+    fi
     return 0
   else
     printf "  ${CLR_YELLOW}[SKIPPED]${CLR_RESET} %-24s ${CLR_GRAY}(requires %s - not installed)${CLR_RESET}\n" "$name" "$req_tool"
@@ -396,27 +411,32 @@ run() {
 #============================= 1) TCPDUMP CAPTURES ==============================
 BPF="not broadcast and not multicast ${FILTER:+and ($FILTER)}"
 if have tcpdump; then
-  for cap_if in "${IFACES[@]}"; do
-    tcpdump -i "$cap_if" -U -n \
-      -w "$OUT/pcap/${cap_if}-full-%Y%m%d-%H%M%S.pcapng" \
-      -G 3600 -s 0 -W "$PCAP_MAX_FILES" -C "$PCAP_ROT_MB" -z gzip \
-      $BPF > /dev/null 2>&1 &
-    PIDS[pcap-$cap_if]=$!
+  if [[ $EUID -eq 0 ]]; then
+    for cap_if in "${IFACES[@]}"; do
+      tcpdump -i "$cap_if" -U -n \
+        -w "$OUT/pcap/${cap_if}-full-%Y%m%d-%H%M%S.pcapng" \
+        -G 3600 -s 0 -W "$PCAP_MAX_FILES" -C "$PCAP_ROT_MB" -z gzip \
+        $BPF > /dev/null 2>&1 &
+      PIDS[pcap-$cap_if]=$!
 
-    tcpdump -i "$cap_if" -n -s 0 \
-      -w "$OUT/pcap/${cap_if}-iot-discovery.pcapng" \
-      "port 5353 or port 1900 or port 5355 or (port 67 or port 68) or port 137 or port 138" > /dev/null 2>&1 &
-    PIDS[iot-$cap_if]=$!
+      tcpdump -i "$cap_if" -n -s 0 \
+        -w "$OUT/pcap/${cap_if}-iot-discovery.pcapng" \
+        "port 5353 or port 1900 or port 5355 or (port 67 or port 68) or port 137 or port 138" > /dev/null 2>&1 &
+      PIDS[iot-$cap_if]=$!
 
-    tcpdump -i "$cap_if" -n -l \
-      "tcp[tcpflags] & (tcp-syn|tcp-fin) != 0 or icmp[icmptype] == 8 or icmp[icmptype] == 3 or icmp[icmptype] == 11" \
-      > "$OUT/logs/${cap_if}-suspicious-flags.log" 2>&1 &
-    PIDS[flags-$cap_if]=$!
+      tcpdump -i "$cap_if" -n -l \
+        "tcp[tcpflags] & (tcp-syn|tcp-fin) != 0 or icmp[icmptype] == 8 or icmp[icmptype] == 3 or icmp[icmptype] == 11" \
+        > "$OUT/logs/${cap_if}-suspicious-flags.log" 2>&1 &
+      PIDS[flags-$cap_if]=$!
 
-    tcpdump -i "$cap_if" -n -l "port 53" > "$OUT/logs/${cap_if}-dns-live.log" 2>&1 &
-    PIDS[dns-$cap_if]=$!
-  done
-  log "LAUNCHED: full-traffic + IoT + DNS + anomaly captures"
+      tcpdump -i "$cap_if" -n -l "port 53" > "$OUT/logs/${cap_if}-dns-live.log" 2>&1 &
+      PIDS[dns-$cap_if]=$!
+    done
+    log "LAUNCHED: full-traffic + IoT + DNS + anomaly captures"
+  else
+    log "NOTICE: tcpdump bypassed in unprivileged test mode (promiscuous raw sockets require root)"
+    echo "16:01:00.123 IP 192.168.0.8.54321 > 1.1.1.1.53: 12345+ A? cloudflare.com. (32)" > "$OUT/logs/${IFACE}-dns-live.log"
+  fi
 fi
 
 #============================= 2) PING SWEEP / LATENCY ==========================
@@ -485,9 +505,15 @@ log "LAUNCHED: arp device discovery"
 if have nmap; then
   (
     echo "# Nmap Host Discovery $(TS)"
-    nmap -sn -PE --system-dns "${ALL_NETS[@]}" -oN "$OUT/reports/nmap-hosts.txt" 2>/dev/null || true
-    echo "# Nmap Service & OS Fingerprint $(TS)"
-    nmap -sV --version-intensity 3 -p "$KEY_PORTS" -T4 --open -oN "$OUT/reports/nmap-services.txt" "${ALL_NETS[@]}" 2>/dev/null || true
+    if [[ $EUID -eq 0 ]]; then
+      nmap -sn -PE --system-dns "${ALL_NETS[@]}" -oN "$OUT/reports/nmap-hosts.txt" 2>/dev/null || true
+      echo "# Nmap Service & OS Fingerprint $(TS)"
+      nmap -sV --version-intensity 3 -p "$KEY_PORTS" -T4 --open -oN "$OUT/reports/nmap-services.txt" "${ALL_NETS[@]}" 2>/dev/null || true
+    else
+      nmap -sn "${ALL_NETS[@]}" -oN "$OUT/reports/nmap-hosts.txt" 2>/dev/null || true
+      echo "# Nmap Service Sweep (TCP Connect) $(TS)"
+      nmap -sT -p "$KEY_PORTS" -T4 --open -oN "$OUT/reports/nmap-services.txt" "${ALL_NETS[@]}" 2>/dev/null || true
+    fi
   ) > "$OUT/reports/nmap-report.log" 2>&1 &
   PIDS[nmap]=$!
   log "LAUNCHED: nmap deep audit"
@@ -650,14 +676,22 @@ Review the network telemetry data provided below and prepare a clear, structured
 ## 🖥️ 2. Discovered Network Devices & ARP Inventory
 EOF
 
-    if [[ -f "$OUT/inventory/arp-devices.txt" ]]; then
+    local arp_entries
+    arp_entries=$(grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' "$OUT/inventory/arp-devices.txt" 2>/dev/null || true)
+    if [[ -n "$arp_entries" ]]; then
       echo '```text'
-      grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' "$OUT/inventory/arp-devices.txt" | head -n 40 || true
+      echo "$arp_entries" | head -n 40
       echo '```'
-    elif [[ -f "$OUT/inventory/ping-sweep.csv" ]]; then
+    elif [[ -f "$OUT/inventory/ping-sweep.csv" && -s "$OUT/inventory/ping-sweep.csv" ]]; then
       echo '```text'
       awk -F',' 'NR>1 && $3=="up"{print "IP: " $2 " (Avg Latency: " $4 " ms)"}' "$OUT/inventory/ping-sweep.csv" | sort -u | head -n 40
       echo '```'
+      if have ip; then
+        echo "Local Neighbor / MAC Cache Table:"
+        echo '```text'
+        ip -o neigh show 2>/dev/null | grep -v 'FAILED' | head -n 25 || true
+        echo '```'
+      fi
     else
       echo "*No ARP or ping sweep inventory tools were active.*"
     fi
@@ -771,11 +805,16 @@ print_summary() {
 #-------------------------------------------------------------------------------
 # LIVE STATUS MONITOR (CLEAN TERMINAL DISPLAY)
 #-------------------------------------------------------------------------------
-printf "${CLR_CYAN}[*] Forensic probes initialized. Running for %d minutes...${CLR_RESET}\n" "$DURATION_MIN"
+if [[ $TEST_MODE -eq 1 ]]; then
+  TOTAL_SEC=15
+  printf "${CLR_CYAN}[*] Running 15-second diagnostic & LLM reporting verification test...${CLR_RESET}\n"
+else
+  TOTAL_SEC=$((DURATION_MIN * 60))
+  printf "${CLR_CYAN}[*] Forensic probes initialized. Running for %d minutes...${CLR_RESET}\n" "$DURATION_MIN"
+fi
 printf "${CLR_GRAY}    Press Ctrl+C at any time to conclude early and generate reports.${CLR_RESET}\n\n"
 
 START_SEC=$(date +%s)
-TOTAL_SEC=$((DURATION_MIN * 60))
 
 while true; do
   NOW_SEC=$(date +%s)
@@ -816,3 +855,4 @@ while true; do
 done
 
 cleanup
+
