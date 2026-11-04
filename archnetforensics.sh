@@ -1,0 +1,1 @@
+bin/archnetforensics.sh

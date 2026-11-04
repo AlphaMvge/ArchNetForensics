@@ -1,0 +1,22 @@
+# ArchNetForensics output directories & artifacts
+archnet-forensics-*/
+netforensics-*/
+*.pcap
+*.pcapng
+*.pcapng.gz
+*.log
+*.ndjson
+*.csv
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+*.egg-info/
+
+# System
+.DS_Store
+*.swp
+*~
