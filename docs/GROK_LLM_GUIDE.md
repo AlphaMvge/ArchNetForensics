@@ -55,3 +55,4 @@ Once Grok analyzes your `GROK_ANALYSIS.md`, you can ask:
 - *"Are any of the discovered IoT devices known for security vulnerabilities?"*
 - *"Is the DNS traffic showing signs of malware beaconing or data exfiltration?"*
 - *"How do I isolate IP 192.168.1.145 on my home router?"*
+

@@ -34,3 +34,4 @@ echo -e "${GREEN}[+] ArchNetForensics installation complete!${NC}"
 echo -e "${CYAN}[*] Usage:${NC}"
 echo -e "    sudo archnetforensics           # Launch network forensics & anomaly suite"
 echo -e "    sudo archnet-deauth-ids         # Launch companion Wi-Fi deauth/disassoc IDS"
+

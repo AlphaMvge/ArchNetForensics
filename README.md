@@ -163,3 +163,4 @@ sudo ./archnetforensics.sh --wifi-ids -i wlan1mon
 ## 📄 License
 
 This project is licensed under the [MIT License](LICENSE) © 2026 AlphaMvge.
+

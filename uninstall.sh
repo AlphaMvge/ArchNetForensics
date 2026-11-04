@@ -20,3 +20,4 @@ rm -f /usr/local/bin/archnet-deauth-ids
 rm -f /usr/local/bin/archnet-setup-monitor
 
 echo -e "${GREEN}[+] ArchNetForensics successfully uninstalled.${NC}"
+
